@@ -1,44 +1,55 @@
 package lru
 
-import "sync"
-
-// LRU is a generic interface representing a Least Recently Used (LRU) cache.
-type LRU[K comparable, V any] interface {
-	// ListAll returns a map containing all key-value pairs in the LRU cache.
-	ListAll() map[K]V
-
-	// Contains checks if a key is present in the LRU cache.
+type Base[K comparable, V any] interface {
+	// Contains checks if the provided key is present in the LRU cache.
+	// It returns true if the key is found in the cache, and false otherwise.
+	// The function does not affect the cache's state or modify any data.
 	Contains(key K) bool
 
-	// Set adds or updates a key-value pair in the LRU cache.
-	Set(key K, value V)
-
-	// Get retrieves the value associated with the given key from the LRU cache.
-	// If the key is found, the associated value and true are returned; otherwise,
-	// a default value and false are returned.
+	// Get retrieves the value associated with the provided key from the LRU cache.
+	// If the key exists in the cache, its corresponding value is returned along with a boolean true.
+	// If the key is not found in the cache, an empty value and boolean false are returned.
+	//
+	// The Get operation updates the order of items in the cache to reflect the most recently accessed item.
+	// If the item exists, it is moved to the head of the cache to prioritize recently accessed items.
 	Get(key K) (value V, found bool)
 
-	// Del removes a key-value pair from the LRU cache and returns true if successful.
+	// Del removes the key-value pair associated with the provided key from the LRU cache.
+	// If the key is found and the removal is successful, the function returns true.
 	// If the key is not found, it returns false.
+	//
+	// The function also adjusts the internal linked list of cache items to maintain its order.
+	// If the removed item was the head or tail of the list, appropriate adjustments are made.
+	// The deleted item's memory is released for garbage collection.
 	Del(key K) bool
 }
 
-// cache is a generic struct representing an item in a cache.
-type cache[K comparable, V any] struct {
-	key   K            // The key associated with the cache item.
-	value V            // The value associated with the cache item.
-	prev  *cache[K, V] // Pointer to the previous cache item.
-	next  *cache[K, V] // Pointer to the next cache item.
+// LRU is a generic interface representing a Least Recently Used (LRU) cache.
+type LRU[K comparable, V any] interface {
+	Base[K, V]
+
+	// Set adds or updates a key-value pair in the LRU cache with the provided key and value.
+	// If the key already exists in the cache, its corresponding value will be updated.
+	// If the key is new, a new entry will be created with the provided value.
+	//
+	// This function is thread-safe and utilizes a read-write lock to ensure concurrent access
+	// to the cache's internal data structures.
+	Set(key K, value V)
 }
 
-// lru is a generic struct representing a Least Recently Used (LRU) cache.
-type lru[K comparable, V any] struct {
-	cache        map[K]*cache[K, V] // The map storing cached items.
-	size         int                // The maximum number of items the cache can hold.
-	head         *cache[K, V]       // The head of the linked list representing the LRU order.
-	tail         *cache[K, V]       // The tail of the linked list representing the LRU order.
-	length       int                // The current number of items in the cache.
-	sync.RWMutex                    // A mutex for concurrent access.
+// LRUWithExpiry is a generic interface representing a Least Recently Used (LRU) cache.
+type LRUWithExpiry[K comparable, V any] interface {
+	Base[K, V]
+
+	// SetWithExpiry adds or updates a key-value pair in the LRU cache with the provided key, value, and time-to-live (TTL).
+	// If the key already exists in the cache, its corresponding value and TTL will be updated.
+	// If the key is new, a new entry will be created with the provided value and TTL.
+	//
+	// The TTL parameter represents the time duration in milliseconds for which the key-value pair will be valid in the cache.
+	//
+	// This function is thread-safe and utilizes a read-write lock to ensure concurrent access
+	// to the cache's internal data structures.
+	SetWithExpiry(key K, value V, ttl int)
 }
 
 // New creates a new instance of a Least Recently Used (LRU) cache with the specified size.
@@ -52,139 +63,17 @@ func New[K comparable, V any](size int) LRU[K, V] {
 	}
 }
 
-func (l *lru[K, V]) Contains(key K) bool {
-	_, ok := l.cache[key]
-	return ok
-}
-
-func (l *lru[K, V]) Set(key K, value V) {
-	l.RWMutex.RLock()
-	defer l.RUnlock()
-	// if the key value already present in the lru
-	// Linked list should be re-ordered
-	// Cache value also should be updated in case of change
-	if l.Contains(key) {
-		c := l.cache[key]
-		// key is at head
-		if c.prev == nil {
-			c.next.prev = nil
-			l.head = c.next
-		} else if c.next == nil { // key is at tail
-			c.prev.next = nil
-			l.tail = c.prev
-		} else {
-			c.next.prev = c.prev
-			c.prev.next = c.next
-		}
-
-		c.prev = nil
-		c.next = l.head
-		c.value = value
-
-		l.head = c
-		l.cache[key] = c
-		return
+// New creates a new instance of a Least Recently Used (LRU) cache with the specified size.
+// It returns a pointer to an lru[K, V] instance.
+func NewWithExpiry[K comparable, V any](size int) LRUWithExpiry[K, V] {
+	out := &lru[K, V]{
+		cache:      map[K]*cache[K, V]{},
+		size:       size,
+		withExpiry: true,
+		length:     0,
+		head:       nil,
 	}
-
-	// if lru length tries to exceed the capacity
-	// drop last list/ which is least used cache
-	if l.length >= l.size {
-		l.del(l.tail.key)
-	}
-
-	if l.head == nil {
-		c := &cache[K, V]{key: key, value: value, next: nil, prev: nil}
-		l.head = c
-		l.tail = c
-		l.cache[key] = c
-		l.length++
-	} else {
-		c := &cache[K, V]{key: key, value: value, next: l.head, prev: nil}
-		l.head.prev = c
-		l.head = c
-		l.cache[key] = c
-		l.length++
-	}
-}
-
-func (l *lru[K, V]) Get(key K) (V, bool) {
-	l.RWMutex.RLock()
-	defer l.RWMutex.RUnlock()
-
-	if l.Contains(key) {
-		c := l.cache[key]
-
-		// if it was head do nothing just return value
-		if c.prev == nil {
-			return c.value, true
-		}
-
-		// if it was tail assign last item as tail and move it to head and link to previous head node
-		if c.next == nil {
-			c.prev.next = nil
-			l.tail = c.prev
-			c.prev = nil
-			c.next = l.head
-			l.head.prev = c
-			l.head = c
-
-			return c.value, true
-		}
-
-		// if it was neither head not tail then link its prev node to next node and move found value to head
-		c.prev.next = c.next
-		c.next.prev = c.prev
-		c.next = l.head
-		c.prev = nil
-		l.head = c
-
-		return c.value, true
-	}
-
-	var emptyVal V
-	return emptyVal, false
-}
-
-func (l *lru[K, V]) Del(key K) bool {
-	l.RWMutex.RLock()
-	defer l.RUnlock()
-
-	return l.del(key)
-}
-
-func (l *lru[K, V]) del(key K) bool {
-	if !l.Contains(key) {
-		return false
-	}
-
-	c := l.cache[key]
-	if c.prev == nil {
-		c.next.prev = nil
-		l.head = c.next
-	} else if c.next == nil {
-		c.prev.next = nil
-		l.tail = c.prev
-	} else {
-		c.next.prev = c.prev
-		c.prev.next = c.next
-	}
-
-	delete(l.cache, key)
-	l.length--
-	c = nil
-
-	return true
-}
-
-func (l *lru[K, V]) ListAll() map[K]V {
-	out := map[K]V{}
-
-	h := l.head
-	for h.next != nil {
-		out[h.key] = h.value
-		h = h.next
-	}
-	out[h.key] = h.value
+	out.startCleaner()
 
 	return out
 }
