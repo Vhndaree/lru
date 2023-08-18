@@ -1,0 +1,10 @@
+goos: darwin
+goarch: amd64
+pkg: github.com/vhndaree/lru
+cpu: Intel(R) Core(TM) i7-9750H CPU @ 2.60GHz
+BenchmarkMYLRU/SET-12         	1000000000	         0.01917 ns/op
+BenchmarkMYLRU/Get-12         	1000000000	         0.002644 ns/op
+BenchmarkMYLRU/Contains-12    	1000000000	         0.001470 ns/op
+BenchmarkMYLRU/Delete-12      	1000000000	         0.001186 ns/op
+PASS
+ok  	github.com/vhndaree/lru	10.626s
