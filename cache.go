@@ -79,16 +79,18 @@ func (l *lru[K, V]) set(key K, value V, expiry time.Time) {
 	// Cache value also should be updated in case of change
 	if l.Contains(key) {
 		c := l.cache[key]
-		// key is at head
-		if c.prev == nil {
-			c.next.prev = nil
-			l.head = c.next
-		} else if c.next == nil { // key is at tail
-			c.prev.next = nil
-			l.tail = c.prev
-		} else {
-			c.next.prev = c.prev
-			c.prev.next = c.next
+
+		if c.prev != nil || c.next != nil {
+			if c.prev == nil {
+				c.next.prev = nil
+				l.head = c.next
+			} else if c.next == nil {
+				c.prev.next = nil
+				l.tail = c.prev
+			} else {
+				c.next.prev = c.prev
+				c.prev.next = c.next
+			}
 		}
 
 		c.prev = nil
