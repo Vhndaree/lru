@@ -5,24 +5,24 @@ import (
 	"time"
 )
 
-// cache is a generic struct representing an item in a cache.
+// cache represents an item in the cache.
 type cache[K comparable, V any] struct {
-	key   K            // The key associated with the cache item.
-	value V            // The value associated with the cache item.
+	key   K            // Key associated with the cache item.
+	value V            // Value associated with the cache item.
 	prev  *cache[K, V] // Pointer to the previous cache item.
 	next  *cache[K, V] // Pointer to the next cache item.
-	ttl   *time.Time   // cache expiry time
+	ttl   *time.Time   // Cache expiry time.
 }
 
-// lru is a generic struct representing a Least Recently Used (LRU) cache.
+// lru represents a Least Recently Used (LRU) cache.
 type lru[K comparable, V any] struct {
-	cache        map[K]*cache[K, V] // The map storing cached items.
-	size         int                // The maximum number of items the cache can hold.
-	withExpiry   bool               // Flag that enables/ disables lru with expiry
-	head         *cache[K, V]       // The head of the linked list representing the LRU order.
-	tail         *cache[K, V]       // The tail of the linked list representing the LRU order.
-	length       int                // The current number of items in the cache.
-	sync.RWMutex                    // A mutex for concurrent access.
+	cache      map[K]*cache[K, V] // Map storing cached items.
+	size       int                // Maximum number of items the cache can hold.
+	withExpiry bool               // Flag to enable/disable LRU with expiry.
+	head       *cache[K, V]       // Head of the linked list representing the LRU order.
+	tail       *cache[K, V]       // Tail of the linked list representing the LRU order.
+	length     int                // Current number of items in the cache.
+	sync.Mutex                    // Mutex for concurrent access.
 }
 
 // Contains checks if the provided key is present in the LRU cache.
@@ -44,8 +44,8 @@ func (l *lru[K, V]) Contains(key K) bool {
 //
 //	cache.Set("myKey", "myValue")
 func (l *lru[K, V]) Set(key K, value V) {
-	l.RWMutex.RLock()
-	defer l.RUnlock()
+	l.Mutex.Lock()
+	defer l.Unlock()
 
 	var expiry time.Time
 	l.set(key, value, expiry)
@@ -64,23 +64,18 @@ func (l *lru[K, V]) Set(key K, value V) {
 //
 //	cache.SetWithExpiry("myKey", "myValue", 5000) // Sets the value with a TTL of 5 seconds
 func (l *lru[K, V]) SetWithExpiry(key K, value V, ttl int) {
-	l.RWMutex.RLock()
-	defer l.RUnlock()
+	l.Mutex.Lock()
+	defer l.Unlock()
 
 	l.set(key, value, time.Now().Add(time.Duration(ttl)*time.Millisecond))
 }
 
 func (l *lru[K, V]) set(key K, value V, expiry time.Time) {
-	l.RWMutex.RLock()
-	defer l.RUnlock()
-
 	// if the key value already present in the lru
 	// Linked list should be re-ordered
 	// Cache value also should be updated in case of change
-	if l.Contains(key) {
-		c := l.cache[key]
-
-		if c.prev != nil || c.next != nil {
+	if c, ok := l.cache[key]; ok {
+		if c != l.head {
 			if c.prev == nil {
 				c.next.prev = nil
 				l.head = c.next
@@ -96,7 +91,6 @@ func (l *lru[K, V]) set(key K, value V, expiry time.Time) {
 		c.prev = nil
 		c.next = l.head
 		c.value = value
-
 		c.ttl = &expiry
 
 		l.head = c
@@ -110,19 +104,17 @@ func (l *lru[K, V]) set(key K, value V, expiry time.Time) {
 		l.del(l.tail.key)
 	}
 
+	c := &cache[K, V]{key: key, value: value, ttl: &expiry, next: l.head, prev: nil}
+
 	if l.head == nil {
-		c := &cache[K, V]{key: key, value: value, ttl: &expiry, next: nil, prev: nil}
-		l.head = c
 		l.tail = c
-		l.cache[key] = c
-		l.length++
 	} else {
-		c := &cache[K, V]{key: key, value: value, ttl: &expiry, next: l.head, prev: nil}
 		l.head.prev = c
-		l.head = c
-		l.cache[key] = c
-		l.length++
 	}
+
+	l.head = c
+	l.cache[key] = c
+	l.length++
 }
 
 // Get retrieves the value associated with the provided key from the LRU cache.
@@ -132,12 +124,10 @@ func (l *lru[K, V]) set(key K, value V, expiry time.Time) {
 // The Get operation updates the order of items in the cache to reflect the most recently accessed item.
 // If the item exists, it is moved to the head of the cache to prioritize recently accessed items.
 func (l *lru[K, V]) Get(key K) (V, bool) {
-	l.RWMutex.RLock()
-	defer l.RWMutex.RUnlock()
+	l.Mutex.Lock()
+	defer l.Mutex.Unlock()
 
-	if l.Contains(key) {
-		c := l.cache[key]
-
+	if c, ok := l.cache[key]; ok {
 		// if it was head do nothing just return value
 		if c.prev == nil {
 			return c.value, true
@@ -177,8 +167,8 @@ func (l *lru[K, V]) Get(key K) (V, bool) {
 // If the removed item was the head or tail of the list, appropriate adjustments are made.
 // The deleted item's memory is released for garbage collection.
 func (l *lru[K, V]) Del(key K) bool {
-	l.RWMutex.RLock()
-	defer l.RUnlock()
+	l.Mutex.Lock()
+	defer l.Unlock()
 
 	return l.del(key)
 }

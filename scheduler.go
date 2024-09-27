@@ -18,18 +18,16 @@ func (l *lru[K, V]) startCleaner() {
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
 
-		for {
-			select {
-			case <-ticker.C:
-				h := l.head
-				for h != nil {
-					if h.ttl.Before(time.Now()) {
-						l.del(h.key)
-					}
+		for range ticker.C {
+			l.Mutex.Lock()
 
-					h = h.next
+			for h := l.head; h != nil; h = h.next {
+				if h.ttl.Before(time.Now()) {
+					l.del(h.key)
 				}
 			}
+
+			l.Mutex.Unlock()
 		}
 	}()
 }

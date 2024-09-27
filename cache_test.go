@@ -1,7 +1,9 @@
 package lru
 
 import (
+	"fmt"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 )
@@ -116,5 +118,30 @@ func TestLRU(t *testing.T) {
 				t.Errorf("Expected false; Actual = %v", ok)
 			}
 		})
+	})
+
+	t.Run("should handle concurrency", func(t *testing.T) {
+		count := 5
+		cache := New[string, int](count)
+
+		var wg sync.WaitGroup
+
+		for i := 0; i < count; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				cache.Set(fmt.Sprintf("%d", i), i)
+			}(i)
+		}
+
+		for i := 0; i < count; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				cache.Get(fmt.Sprintf("%d", i))
+			}(i)
+		}
+
+		wg.Wait()
 	})
 }
